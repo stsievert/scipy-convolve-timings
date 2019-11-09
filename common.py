@@ -62,11 +62,11 @@ def _fftconv_faster(x_shape, h_shape, mode):
 
     S1, S2 = x_shape, h_shape
     if len(x_shape) == 1:
-        S1, S2 = S1[0], S2[0]
+        s1, s2 = S1[0], S2[0]
         direct_muls = {
-            "full": S1 *S2,
-            "valid": (S2 - S1 + 1) * S1 if S2 >= S1 else (S1 - S2 + 1) * S2,
-            "same": S1 * S2 if S1 <= S2 else S1 * S2 - (S2 // 2) * ((S2 + 1) // 2),
+            "full": s1 * s2,
+            "valid": (s2 - s1 + 1) * s1 if s2 >= s1 else (s1 - s2 + 1) * s2,
+            "same": s1 * s2 if s1 <= s2 else s1 * s2 - (s2 // 2) * ((s2 + 1) // 2),
         }
     else:
         direct_muls = {
@@ -79,36 +79,45 @@ def _fftconv_faster(x_shape, h_shape, mode):
     # see whether the Fourier transform convolution method or the direct
     # convolution method is faster (discussed in scikit-image PR #1792)
     # direct_time = _direct_muls(x_shape, h_shape, mode)
-    fft_time = sum_builtin(n * np.log(n) for n in (x_shape + h_shape +
-                                               tuple(out_shape)))
+    # fft_time = sum_builtin(n * np.log(n) for n in (x_shape + h_shape +
+    #                                            tuple(out_shape)))
+    # fft_time = sum(n * np.log(n) for n in (x_shape + h_shape + tuple(out_shape)))
+    #N = _prod(n+k+1 for n, k in zip(S1, S2))
+    # fft_time = N * np.log(N)
+    N = [_prod(shape) for shape in [S1, S2, out_shape]]
+    fft_time = sum(n * np.log(n) for n in N)
     return fft_time, direct_time
 
-
 @lru_cache()
+def _read_df(ndim):
+    p = Path(__file__).parent / f"{ndim}d" / "constants.csv"
+    df = pd.read_csv(str(p))
+    return df
+df = pd.concat([_read_df(ndim) for ndim in [1, 2]], sort=False)
+    
+
 def _get_constant(mode, ndim, x_size, h_size, test=False):
-    # p = Path(__file__).parent / f"{ndim}d" / "constants.csv"
-    # df = pd.read_csv(str(p))
-    # if mode != "same":
-    #     idx = (df["ndim"] == ndim) & (df["mode"] == mode)
-    # else: 
-    #     cond = "np_conv" if h_size <= x_size else "sp_conv"
-    #     idx = (df["ndim"] == ndim) & (df["mode"] == "same")
-    #     if "cond" in df:
-    #         idx &= (df["cond"] == cond)
-    # assert idx.sum() == 1
-    # return df[idx]["constant"].values.item()
-    if ndim == 1:
-        constants = {
-            "valid": 14.336458,
-            "full": 11.548068,
-            "same": 15.747428 if h_size <= x_size else 0.73367078,
-        }
-    else:
-        constants = {
-            "same": 16.487500,
-            "valid": 11.680560,
-            "full": 10.423440,
-        }
+    if mode != "same":
+        idx = (df["ndim"] == ndim) & (df["mode"] == mode)
+    else: 
+        cond = "np_conv" if h_size <= x_size else "sp_conv"
+        idx = (df["ndim"] == ndim) & (df["mode"] == "same")
+        if ndim == 1:
+            idx &= (df["cond"] == cond)
+    assert idx.sum() == 1
+    return df.loc[idx, "constant"].values.item()
+#     if ndim == 1:
+#         constants = {
+#             "valid": 14.336458,
+#             "full": 11.548068,
+#             "same": 15.747428 if h_size <= x_size else 0.73367078,
+#         }
+#     else:
+#         constants = {
+#             "same": 16.487500,
+#             "valid": 11.680560,
+#             "full": 10.423440,
+#         }
     return constants[mode]
         
 
