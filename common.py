@@ -84,40 +84,46 @@ def _fftconv_faster(x_shape, h_shape, mode):
     # fft_time = sum(n * np.log(n) for n in (x_shape + h_shape + tuple(out_shape)))
     #N = _prod(n+k+1 for n, k in zip(S1, S2))
     # fft_time = N * np.log(N)
-    N = [_prod(shape) for shape in [S1, S2, out_shape]]
+    full_out_shape = [n + k - 1 for n, k in zip(S1, S2)]
+    N = [_prod(shape) for shape in [S1, S2, full_out_shape]]
     fft_time = sum(n * np.log(n) for n in N)
     return fft_time, direct_time
 
 @lru_cache()
-def _read_df(ndim):
+def __read_constant(mode, ndim, np_conv):
     p = Path(__file__).parent / f"{ndim}d" / "constants.csv"
     df = pd.read_csv(str(p))
-    return df
-df = pd.concat([_read_df(ndim) for ndim in [1, 2]], sort=False)
+    if ndim == 2:
+        if mode != "same":
+            idx = (df["ndim"] == ndim) & (df["mode"] == mode)
+        else: 
+            cond = "np_conv" if np_conv else "sp_conv"
+            idx = (df["ndim"] == ndim) & (df["mode"] == "same")
+        assert idx.sum() == 1
+        return df.loc[idx, ["O_fft", "O_direct", "O_offset"]].values.flatten().tolist()
+    elif ndim == 1:
+        idx = (df["ndim"] == ndim) & (df["mode"] == "same")
+        cond = "np_conv" if np_conv else "sp_conv"
+        idx &= (df["cond"] == cond)
+    return df.loc[idx, ["O_fft", "O_direct", "O_offset"]].values.flatten().tolist()
     
 
 def _get_constant(mode, ndim, x_size, h_size, test=False):
-    if mode != "same":
-        idx = (df["ndim"] == ndim) & (df["mode"] == mode)
-    else: 
-        cond = "np_conv" if h_size <= x_size else "sp_conv"
-        idx = (df["ndim"] == ndim) & (df["mode"] == "same")
-        if ndim == 1:
-            idx &= (df["cond"] == cond)
-    assert idx.sum() == 1
-    return df.loc[idx, "constant"].values.item()
-#     if ndim == 1:
-#         constants = {
-#             "valid": 14.336458,
-#             "full": 11.548068,
-#             "same": 15.747428 if h_size <= x_size else 0.73367078,
-#         }
-#     else:
-#         constants = {
-#             "same": 16.487500,
-#             "valid": 11.680560,
-#             "full": 10.423440,
-#         }
+    if ndim == 1:
+        offset = 0
+        constants = {
+            "valid": (7.2880e-6, 3.344823e-7, offset),
+            "full": (7.2673e-6, 2.01e-7, offset),
+            "same": (2.3223e-5, 1.51e-6, offset) if h_size <= x_size else\
+                    (2.3427e-5, 17e-6, offset),
+        }
+    else:
+        offset = -2e-4
+        constants = {
+            "valid": (4.24046e-9, 3.344823e-8, offset),
+            "full": (3.4457e-9, 2.06903e-8, offset),
+            "same": (4.14859e-9, 1.65125e-8, offset),
+        }
     return constants[mode]
         
 
@@ -131,6 +137,13 @@ def _fftconv_faster_test(x_shape, h_shape, mode, test=True):
     is found in both big O constants). Regardless, this had been tuned on an
     early 2015 MacBook Pro with 8GB RAM and an Intel i5 processor.
     """
-    fft_time, direct_time = _fftconv_faster(x_shape, h_shape, mode)
-    big_O_constant = _get_constant(mode, len(x_shape), _prod(x_shape), _prod(h_shape))
-    return "fft" if big_O_constant * fft_time < direct_time else "direct"
+    ndim = len(x_shape)
+    fft_ops, direct_ops = _fftconv_faster(x_shape, h_shape, mode)
+    [O_fft, O_direct, O_offset] = _get_constant(mode, len(x_shape), _prod(x_shape), _prod(h_shape))
+    fft_time = O_fft * fft_ops
+    direct_time = O_direct * direct_ops + O_offset
+    return "fft" if fft_time < direct_time else "direct"
+#     else:
+#         fft_time, direct_time = _fftconv_faster(x_shape, h_shape, mode)
+#         big_O_constant = _get_constant(mode, len(x_shape), _prod(x_shape), _prod(h_shape))
+#         return "fft" if big_O_constant * fft_time < direct_time else "direct"
