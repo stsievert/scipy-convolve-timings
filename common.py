@@ -5,6 +5,7 @@ from pathlib import Path
 
 sum_builtin = sum
 
+
 def _prod(iterable):
     """
     Product of a list of numbers.
@@ -15,14 +16,18 @@ def _prod(iterable):
         product *= x
     return product
 
+
 def _direct_muls(S_1, S_2, mode="full"):
     """Prediction of number of multiplications for these shapes and mode"""
     import numpy as np
+
     if mode == "full":
         if len(S_1) == 1:
             return S_1[0] * S_2[0]
         else:
-            return min(np.prod(S_1), np.prod(S_2)) * np.prod([n + k - 1 for n, k in zip(S_1, S_2)])
+            return min(np.prod(S_1), np.prod(S_2)) * np.prod(
+                [n + k - 1 for n, k in zip(S_1, S_2)]
+            )
     elif mode == "valid":
         if len(S_1) == 1:
             S_1, S_2 = S_1[0], S_2[0]
@@ -30,7 +35,9 @@ def _direct_muls(S_1, S_2, mode="full"):
                 S_1, S_2 = S_2, S_1
             return (S_2 - S_1 + 1) * S_1
         else:
-            return min(np.prod(S_1), np.prod(S_2)) * np.prod([max(n, k) - min(n, k) + 1 for n, k in zip(S_1, S_2)])
+            return min(np.prod(S_1), np.prod(S_2)) * np.prod(
+                [max(n, k) - min(n, k) + 1 for n, k in zip(S_1, S_2)]
+            )
     elif mode == "same":
         if len(S_1) == 1:
             S_1, S_2 = S_1[0], S_2[0]
@@ -40,6 +47,7 @@ def _direct_muls(S_1, S_2, mode="full"):
                 return S_1 * S_2 - (S_2 // 2) * ((S_2 + 1) // 2)
         else:
             return np.prod(S_1) * np.prod(S_2)
+
 
 def _fftconv_faster(x_shape, h_shape, mode):
     """
@@ -82,12 +90,13 @@ def _fftconv_faster(x_shape, h_shape, mode):
     # fft_time = sum_builtin(n * np.log(n) for n in (x_shape + h_shape +
     #                                            tuple(out_shape)))
     # fft_time = sum(n * np.log(n) for n in (x_shape + h_shape + tuple(out_shape)))
-    #N = _prod(n+k+1 for n, k in zip(S1, S2))
+    # N = _prod(n+k+1 for n, k in zip(S1, S2))
     # fft_time = N * np.log(N)
     full_out_shape = [n + k - 1 for n, k in zip(S1, S2)]
-    N = [_prod(shape) for shape in [S1, S2, full_out_shape]]
-    fft_time = sum(n * np.log(n) for n in N)
+    N = _prod(full_out_shape)
+    fft_time = 3 * N * np.log(N)  # 3 separate FFTs of size full_out_shape
     return fft_time, direct_time
+
 
 @lru_cache()
 def __read_constant(mode, ndim, np_conv):
@@ -96,7 +105,7 @@ def __read_constant(mode, ndim, np_conv):
     if ndim == 2:
         if mode != "same":
             idx = (df["ndim"] == ndim) & (df["mode"] == mode)
-        else: 
+        else:
             cond = "np_conv" if np_conv else "sp_conv"
             idx = (df["ndim"] == ndim) & (df["mode"] == "same")
         assert idx.sum() == 1
@@ -104,28 +113,47 @@ def __read_constant(mode, ndim, np_conv):
     elif ndim == 1:
         idx = (df["ndim"] == ndim) & (df["mode"] == "same")
         cond = "np_conv" if np_conv else "sp_conv"
-        idx &= (df["cond"] == cond)
+        idx &= df["cond"] == cond
     return df.loc[idx, ["O_fft", "O_direct", "O_offset"]].values.flatten().tolist()
-    
+
 
 def _get_constant(mode, ndim, x_size, h_size, test=False):
+    O_fft, O_direct, O_offset = __read_constant(mode, ndim, h_size <= x_size)
     if ndim == 1:
-        offset = 0
-        constants = {
-            "valid": (7.2880e-6, 3.344823e-7, offset),
-            "full": (7.2673e-6, 2.01e-7, offset),
-            "same": (2.3223e-5, 1.51e-6, offset) if h_size <= x_size else\
-                    (2.3427e-5, 17e-6, offset),
-        }
+        O_offset = -1e-3
+        if mode == "same" and x_size < h_size:
+            O_offset = -1e-5
     else:
-        offset = -2e-4
-        constants = {
-            "valid": (4.24046e-9, 3.344823e-8, offset),
-            "full": (3.4457e-9, 2.06903e-8, offset),
-            "same": (4.14859e-9, 1.65125e-8, offset),
-        }
-    return constants[mode]
-        
+        O_offset = -1e-4
+
+    #     if ndim == 1 and mode == "same" and x_size < h_size:
+    #         O_offset = -2e-1
+    #         O_fft = 1.5193e-5
+    #         O_direct = 1.760897e-6
+
+    #     if mode == "same" and ndim == 1 and x_size < h_size:
+    # #         O_offset = 100e-6
+    #         O_offset = -2e-4
+    #         O_direct = 2e-5
+    return O_fft, O_direct, O_offset
+
+
+#     if ndim == 1:
+#         offset = 0
+#         constants = {
+#             "valid": (7.2880e-6, 3.344823e-7, offset),
+#             "full": (7.2673e-6, 2.01e-7, offset),
+#             "same": (2.3223e-5, 1.51e-6, offset) if h_size <= x_size else\
+#                     (2.3427e-5, 17e-6, offset),
+#         }
+#     else:
+#         offset = -2e-4
+#         constants = {
+#             "valid": (4.24046e-9, 3.344823e-8, offset),
+#             "full": (3.4457e-9, 2.06903e-8, offset),
+#             "same": (4.14859e-9, 1.65125e-8, offset),
+#         }
+#     return constants[mode]
 
 
 def _fftconv_faster_test(x_shape, h_shape, mode, test=True):
@@ -139,10 +167,17 @@ def _fftconv_faster_test(x_shape, h_shape, mode, test=True):
     """
     ndim = len(x_shape)
     fft_ops, direct_ops = _fftconv_faster(x_shape, h_shape, mode)
-    [O_fft, O_direct, O_offset] = _get_constant(mode, len(x_shape), _prod(x_shape), _prod(h_shape))
+    [O_fft, O_direct, O_offset] = _get_constant(
+        mode, len(x_shape), _prod(x_shape), _prod(h_shape)
+    )
     fft_time = O_fft * fft_ops
     direct_time = O_direct * direct_ops + O_offset
+    if mode == "same" and ndim == 1 and _prod(x_shape) < _prod(h_shape):
+        if min(fft_time, direct_time) < 1e-4:
+            return "direct"
     return "fft" if fft_time < direct_time else "direct"
+
+
 #     else:
 #         fft_time, direct_time = _fftconv_faster(x_shape, h_shape, mode)
 #         big_O_constant = _get_constant(mode, len(x_shape), _prod(x_shape), _prod(h_shape))
